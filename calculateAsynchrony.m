@@ -195,6 +195,8 @@ for i = 1:numObs
     counter = counter + 1;
 end
 
-set(gca,'YTick', [])
+if plotMatches == 1
+    set(gca,'YTick', [])
+end
 
 end
