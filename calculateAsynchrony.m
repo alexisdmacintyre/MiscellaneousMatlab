@@ -1,4 +1,4 @@
-function asynchronies = calculateAsynchrony(vector1,vector2,plotMatches)
+function [asynchronies,unmatched1,unmatched2] = calculateAsynchrony(vector1,vector2,plotMatches)
 
 % Calculates asynchrony (absolute distance) between paired datapoints from
 % two vectors. This function was developed for rhythm behavioural 
@@ -9,15 +9,24 @@ function asynchronies = calculateAsynchrony(vector1,vector2,plotMatches)
 % distance. Single unpaired points are ignored, i.e., there is no 'penalty'
 % or note for unpaired points, so adjust accordingly.
 
+% Optional 2nd and 3rd outputs return a vector containing unpaired indices
+% from vectors 1 and 2, respectively.
+
 % The method attempts to account for ordinality, in case a series of
 % best pairings are consistently a little out of time (but not out of step)
 % from each other.
 
 % To visualise the pairings and make sure it's working right, use the 
-% optional 3rd argument (1).
+% optional 3rd input argument (set to 1).
 
 % Example usage including a visualisation:
 % asynchronies = calculateAsynchrony(participant1Drum,participant2Drum,1)
+
+% Example usage without visualisation:
+% [asynchronies,unmatched1,unmatched2] = calculateAsynchrony(participant1Drum,participant2Drum)
+
+
+% comments/suggations: alexisdharrison@gmail.com
 
 if ~exist('plotMatches','var') || plotMatches~=1
     plotMatches = 0;
@@ -26,12 +35,15 @@ end
 if numel(vector1) > numel(vector2) % Longer vector becomes vectorB
     vectorA = vector2;
     vectorB = vector1;
+    longerVector = 1;
 elseif numel(vector1) < numel(vector2)
     vectorB = vector2;
-    vectorA = vector1;
+    vectorA = vector1;    
+    longerVector = 2;
 else
     vectorA = vector1;
     vectorB = vector2;
+    longerVector = 0;
 end
 
 if plotMatches == 1 % plot both vectors together
@@ -66,6 +78,9 @@ for i = 1:numObs
             if plotMatches == 1
                 plot([vectorA(i),vectorB(i)], [1,1.1], '*-')
             end
+            
+            hits(1,i) = vectorA(i);
+            hits(2,i) = vectorB(i);
             
             vectorA(i) = inf;
             vectorB(i) = inf;
@@ -125,7 +140,8 @@ for i = 1:numObs
                         if plotMatches == 1
                             plot([vectorA(i),vectorB(idxA)], [1,1.1], '*-')
                         end
-                        
+                        hits(1,i) = vectorA(i);
+                        hits(2,i) = vectorB(idxA);
                         vectorA(i) = inf;
                         vectorB(idxA) = inf;
                         vectorB(i:idxA-1) = [];
@@ -141,6 +157,8 @@ for i = 1:numObs
                                 plot([vectorA(i),vectorB(i)], [1,1.1], '*-')
                             end
                             
+                            hits(1,i) = vectorA(i);
+                            hits(2,i) = vectorB(i);
                             vectorA(i) = inf;
                             vectorB(i) = inf;
                         else
@@ -162,7 +180,8 @@ for i = 1:numObs
                         if plotMatches == 1
                             plot([vectorA(idxB),vectorB(i)], [1,1.1], '*-')
                         end
-                        
+                        hits(1,i) = vectorA(idxB);
+                        hits(2,i) = vectorB(i);
                         vectorB(i) = inf;
                         vectorA(idxB) = inf;
                         vectorA(i:idxB-1) = [];
@@ -176,8 +195,9 @@ for i = 1:numObs
                             
                             if plotMatches == 1
                                 plot([vectorA(i),vectorB(i)], [1,1.1], '*-')
-                            end
-                            
+                            end                             
+                            hits(1,i) = vectorA(i);
+                            hits(2,i) = vectorB(i);
                             vectorA(i) = inf;
                             vectorB(i) = inf;
                         else
@@ -195,8 +215,16 @@ for i = 1:numObs
     counter = counter + 1;
 end
 
-if plotMatches == 1
-    set(gca,'YTick', [])
+
+if longerVector == 1 
+    [~,unmatched2] = setdiff(vector2,hits(1,:));    
+    [~,unmatched1] = setdiff(vector1,hits(2,:));
+else       
+    [~,unmatched2] = setdiff(vector2,hits(2,:));    
+    [~,unmatched1] = setdiff(vector1,hits(1,:));
 end
+
+
+set(gca,'YTick', [])
 
 end
