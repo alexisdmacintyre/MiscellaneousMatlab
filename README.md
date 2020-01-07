@@ -11,3 +11,6 @@ MATLAB function that accepts a vector of time stamps to be converted to a one-ho
 
 ## genPinkNoise.m
 MATLAB function to create pink noise.
+
+## onsetOffsetRamp.m
+MATLAB function to add onset/offset volume ramping to beginning and ending of WAV.
