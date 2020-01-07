@@ -8,3 +8,6 @@ MATLAB function for calculating asynchrony (euclidean distance) between vectors 
 
 ## timeStamps2Vector.m
 MATLAB function that accepts a vector of time stamps to be converted to a one-hot coded vector. Optionally resamples output vector to desired frequency.
+
+## genPinkNoise.m
+MATLAB function to create pink noise.
