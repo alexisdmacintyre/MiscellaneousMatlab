@@ -1,5 +1,10 @@
 function rampedSound = onsetOffsetRamp(wav,ms,Fs)
 
+% Adds onset and offset volume ramping to WAV
+% wav = WAV file
+% ms = desired length of ramp (e.g., 20 ms)
+% Fs = sample rate
+
 if nargin < 3
     error('Needs wav, ms, and Fs input arguments')
 end
