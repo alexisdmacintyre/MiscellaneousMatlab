@@ -2,8 +2,9 @@
 Odds and ends that may be of use...
 
 ## breathTimes.m
-MATLAB function for detecting the beginning and ending of inhalations during respiration, optimsed for speech breathing.
+MATLAB function for detecting the beginning and ending of inhalations during respiration, optimised for speech breathing.
 
+![Example usage](https://user-images.githubusercontent.com/55560694/95772577-ddd06200-0cb4-11eb-8176-03d63cf7f005.png)
 
 
 ## calculateAsynchrony.m
