@@ -1,6 +1,11 @@
 # MiscellaneousMatlab
 Odds and ends that may be of use...
 
+## breathTimes.m
+MATLAB function for detecting the beginning and ending of inhalations during respiration, optimsed for speech breathing.
+
+
+
 ## calculateAsynchrony.m
 MATLAB function for calculating asynchrony (euclidean distance) between vectors of datapoints (e.g., time stamps, drum hits, linguistic annotations). Plots your pairings and produces a 1d series of absolute distances between paired points, as determined by serial closest two-way matches. Optionally returns indices of unpaired values from each input vector.
 
