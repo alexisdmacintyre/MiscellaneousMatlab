@@ -1,161 +1,142 @@
-% This function identifies respiratory events (inhalation beginnings and
-% endings). Requires MATLAB 2016 or later.
-
-% Required arguments: vector (Nx1 breath signal)
-
-% Optional arguments: Fs (sample rate) 
-% win (length of window in ms for smoothing the breath belt signal, 
-% defaults to 250 ms/250 samples if no Fs given) 
-% plotResults (0 or 1)
-
-% Example usage: [begins,ends] = breathtimes(vector,Fs,win,plotResults) Fs
-% = 1000; win = 250; [begins,ends] = breathTimes(breathBelt,1000,250,1)
-
-% About: Likely inhalation endings are detected as local maxima in the 
-% input breath belt vector.
-% Likely beginnings of inhalation events are then determined based on
-% peaks in the 2nd derivative of the breath belt signal. A few
-% adjustments are performed to fix spuriously early points, etc. The true
-% beginning of the breath is difficult to verify with most breath-belt type
-% equipment, which are by nature a little shakey, but is at least more
-% objective and consistent than human annotation. % If no Fs is given, 1 kHz
-% is assumed for smoothing purposes
-
-% If there are any missing beginning points (i.e., smaller count than count
-% of peaks), they are removed, but you can also simply edit the script (see
-% comments) to interpolate from successful detections.
-
-% Troubleshooting: if the inhalation beginning are occuring too late in the
-% breath belt positive going slope, try increasing the smoothing window
-
+% This function identifies inhalation events (inhalation beginnings and
+% endings) from the breath belt signal. Requires MATLAB 2016 or later. 
+%
+% Usage: [onsets,offsets] =
+% breathTimes(vector,Fs,'WinSz',200,'MinDur',100,'MinHeight',0.1,'Plot',1)
+%
+% Required arguments: vector (Nx1 breath signal); Fs (sample rate)
+%
+% Optional name pair arguments: 'WinSz' (for smoothing, default is 250 ms);
+% 'MinDur' (minimum duration between onset and offset, default is 150 ms);
+% 'MinHeight' (minimum vertical distance between onset and offset), default
+% is 0.05 A.U.); 'Plot' (set to 1 to view results, default is 0)
+%
+% Suggestions: Some breath belt patterns look like inhalations but are
+% associated with vocal exhalation, so make sure you corroborate this
+% function's output with known speech onsets, etc.
+%
 % Alexis Deighton MacIntyre
 % a.macintyre.17@ucl.ac.uk
 
 
-function [begins,ends] = breathTimes(vector,Fs,win,plotResults)
+function [onsets,offsets] = breathTimes(vector,Fs,varargin)
 
-% Parse Inputs
-if exist('win','var')
-    if isempty(win)
-        win = 250;
-    end
-else
-    win = 250;
-end
+defaultWin = 250;
+defaultDuration = 150;
+defaultHeight = 0.5;
+defaultPlot = 0;
 
-if exist('plotResults','var')
-    if isempty(plotResults)
-        plotResults = 0;
-    end
-else
-    plotResults = 0;
-end
+p = inputParser;
+validScalarPosNum = @(x) isnumeric(x) && isscalar(x) && (x > 0);
+validPlot = @(x) (x == 0) || (x == 1);
+addRequired(p,'vector');
+addRequired(p,'Fs',validScalarPosNum);
+addParameter(p,'WinSz',defaultWin,validScalarPosNum);
+addParameter(p,'MinDur',defaultDuration,validScalarPosNum);
+addParameter(p,'MinHeight',defaultHeight,validScalarPosNum);
+addParameter(p,'Plot',defaultPlot,validPlot);
 
-if exist('Fs','var')
-    if isempty(Fs)
-        flagFs = 1;
-        Fs = 1000;
-    else
-        flagFs = 0;
-    end
-else
-    flagFs = 1;
-    Fs = 1000;
-end
+parse(p,vector,Fs,varargin{:});
 
-% Smooth with moving window
+win = p.Results.WinSz;
+minDur = (p.Results.MinDur/1000)*Fs;
+minHt = p.Results.MinHeight;
+plotResults = p.Results.Plot;
+
+timeChunk = round(Fs/20); % Checks linearity of postive-going slope (i.e., inhalations) every 50 ms
+
+% Smooth
 vector_smooth = movmean(vector,Fs*(win/1000));
+vector_smooth = movmean(vector_smooth,round(Fs/50));
 vector_smooth = rescale(vector_smooth,-1,1);
 
 peaks = islocalmax(vector_smooth,'MinProminence',0.1,... % Detect peaks (inhale endings) in breath signal
     'FlatSelection','first');
 peaks = find(peaks);
 
-sigDeriv = [NaN(2,1) ; rescale(movmean(diff(diff(vector_smooth)),Fs/2)-0.25,-1,1)]; % use smoothed 2nd derivative to detect inhale beginnings
-peakBases = islocalmax(sigDeriv,'MinProminence',0.1,'FlatSelection','first');
-peakBases = find(peakBases);
-peakHeights = sigDeriv(peakBases);
-peaks = [peaks NaN(numel(peaks),1)];
+onsets = [];
+offsets = [];
 
-for ii = 1:size(peaks,1) % Join inhale candidate beginning with the endings
+for ii = 1:size(peaks,1)
     
-    if ii ~= 1
-        if ~isnan(peaks(ii-1)) % Don't include candidate beginnings prior to previous ending
-            first = peaks(ii-1,1);
+    % Find peak base
+    if ii == 1
+        t1 = 1;
+    else
+        t1 = peaks(ii-1)-minDur;
+    end
+    t2 = peaks(ii);
+    vec = vector_smooth(t1:t2);
+    
+    % Check for positive linearity
+    meanSlope = [];
+    c = 1;
+    
+    for iii = 1:round((numel(vec)/timeChunk))-1
+        t1_loop = timeChunk*iii;
+        if iii == round((numel(vec)/timeChunk))-1
+            t2_loop = numel(vec);
         else
-            first = 0;
-        end
-    else
-        first = 0;
-    end
-    c = peakBases(peakBases<peaks(ii,1) & peakBases>first);
-    
-    if isempty(c) % If no beginning, delete current ending. Alternatively, 
-        % you can infer missing points using the median breath duration
-        % value by commenting out this part and uncommenting below.
-        peaks(ii,1) = NaN; 
-    else
-        if numel(c) == 1 % only one candidate beginning
-            peaks(ii,2) = c; 
-        else  % If multiple options, choose the beginning associated with highest value in 2nd derivative
-            % d = peaks(ii,1)-c;
-            % c = c(d>minBr); Uncomment and set minBr = to X if Fs known,
-            % e.g., minBr = Fs*0.075;
-            
-            ch = peakHeights(peakBases<peaks(ii,1) & peakBases>first);
-            [~,id] = max(ch);
-            peaks(ii,2) = c(id);
+            t2_loop = t1_loop+timeChunk;
         end
         
-        % Adjust placement of beginning to make sure it's located at the
-        % base of the breath belt slope (i.e., not spuriously earlier)
-        checkLinear = vector_smooth(peaks(ii,2):peaks(ii,1));
-        linDeriv = diff(checkLinear);
-        linDeriv(linDeriv<=0) = NaN;
-        linDeriv = isnan(linDeriv);
-        linDeriv([1 numel(linDeriv)]) = 1;
+        vOut = mean(diff(vec(t1_loop:t2_loop)))*1e+4;
         
-        a = strfind(linDeriv',[0 1]);
-        b = strfind(linDeriv',[1 0]);
-        [~,id] = max(a-b);
-        peaks(ii,2) = peaks(ii,2) + ...
-            b(id) + 1;
+        if vOut < 0.5
+            vOut(2) = 0;
+            c = 1;
+        else
+            vOut(2) = c;
+            c = c + 1;
+        end
+        
+        meanSlope = [meanSlope ; vOut];
     end
-end
-
-peaks(isnan(peaks(:,1)),:) = [];
     
-% Uncomment to infer any missing beginning values using median breath duration
-% brDur = peaks(:,1)-peaks(:,2);
-% brDur = median(brDur(~isnan(brDur)));
+    [~,maxSlope] = max(meanSlope(:,2));
+    peakBase = find(meanSlope(1:maxSlope,2)==1,1,'last');
+    
+    % Adjust inhale end
+    if (timeChunk*maxSlope)+timeChunk < numel(vec)
+        v = vec((timeChunk*peakBase):(timeChunk*maxSlope)+timeChunk);
+    else
+        v = vec((timeChunk*peakBase):numel(vec));
+    end
+    p = quantile(v,0.99);
+    p = find(v>=p,1,'first');
+    offsets = [offsets ; t1+(timeChunk*peakBase)+p];
+    
+    % Adjust inhale begin
+    if (timeChunk*peakBase)-timeChunk > 1
+        v = vec((timeChunk*peakBase)-timeChunk:(timeChunk*peakBase)+timeChunk);
+    else
+        v = vec(1:(timeChunk*peakBase)+timeChunk);
+    end
+    p = quantile(v,0.01);
+    p = find(v<=p,1,'last');
+    onsets = [onsets ; t1+(timeChunk*peakBase)-timeChunk+p];
 
-for ii = find(isnan(peaks(:,2)))'
-    peaks(ii,2) = peaks(ii,1)-brDur;
 end
 
-peaks(peaks(:,2)<0,2) = 1;
-
-begins = peaks(:,2);
-ends = peaks(:,1);
+brDur = offsets-onsets;
+brHt = vector_smooth(offsets)-vector_smooth(onsets);
+idx = brDur < minDur | brHt < minHt;
+onsets(idx) = [];
+offsets(idx) = [];
 
 if plotResults == 1
     plot(vector_smooth,'LineWidth',0.75,'Color',[0.3010 0.7450 0.9330]);
     hold on
-    plot(peaks(:,2),vector_smooth(peaks(:,2)),'gx','MarkerSize',8)
-    plot(peaks(:,1),vector_smooth(peaks(:,1)),'rx','MarkerSize',8)
+    plot(onsets,vector_smooth(onsets),'gx','MarkerSize',8)
+    plot(offsets,vector_smooth(offsets),'rx','MarkerSize',8)
     
     yticks(-1:0.5:1)
     
-    if flagFs == 0
-        xlabel('Time (seconds)');
-        xticks(1:round(numel(vector)/10):numel(vector)+1);
-        t = numel(vector)/Fs;
-        xticklabels(0:round(t/11):t);
-    else
-        xlabel('Samples');
-        xticks(1:round(numel(vector)/11):numel(vector));
-    end
-    
+    xlabel('Time (seconds)');
+    xticks(1:round(numel(vector)/10):numel(vector)+1);
+    t = numel(vector)/Fs;
+    xticklabels(0:round(t/11):t);
+
     grid on
     set(gcf, 'Position', [500, 500, 900, 350])
     legend({'Breath Signal','Initiation','Maxima'},'Location','northeastoutside')
