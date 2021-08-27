@@ -44,6 +44,7 @@ minHt = p.Results.MinHeight;
 plotResults = p.Results.Plot;
 
 timeChunk = round(Fs/25); % Interval to check linearity of postive-going slope (i.e., inhalations) every ~40 ms
+minPeakDist = 300; % Separation in ms between peaks
 
 % Smooth
 vector_smooth = movmean(vector,Fs*(win/1000));
@@ -86,7 +87,7 @@ end
 
 idx = zeros(size(meanSlope,1),1);
 idx(meanSlope(:,2)>=floor(minDur/timeChunk)) = 1;
-idx = strfind(idx',[1 0]); 
+idx = strfind(idx',[1 0]);
 
 peaks = [];
 
@@ -127,7 +128,8 @@ for ii = 1:numel(peaks)
     
     if numel(vec) > minDur
 
-        % If present, trim long flattened section from the top of slope
+        % Analyse slope and trim flat segments preceding true onset/after
+        % true peak
         
         meanSlope = [];
         c = 1;
@@ -143,7 +145,7 @@ for ii = 1:numel(peaks)
             
             vOut = mean(diff(vec(t1_loop:t2_loop)))*1e+4;
             
-            if vOut < 1
+            if vOut < 0
                 vOut(2) = 0;
                 vOut(3) = 0;
                 c = 1;
@@ -161,6 +163,8 @@ for ii = 1:numel(peaks)
             meanSlope = [meanSlope ; vOut];
         end
 
+        % Narrow down end point (peak)
+        
         maxTot = find(meanSlope(:,2)==max(meanSlope(:,2)),1,'last');
         pb = find(meanSlope(1:maxTot,2)==1,1,'last');
         
@@ -185,9 +189,9 @@ for ii = 1:numel(peaks)
         else
             maxSlope = maxTot;
         end
-        
-        % Locate inhale begin
-        v = vec(timeChunk*pb:(timeChunk*pb)+timeChunk);
+
+        % Specify inhale begin
+        v = vec(timeChunk*pb:timeChunk*(pb+mp));
         p = quantile(v,0.1);
         p = find(v<=p,1,'last');
         onsets = [onsets ; t1+(timeChunk*pb)+p];
@@ -211,37 +215,84 @@ end
 onsets(offsets>=numel(vector_smooth)) = [];
 offsets(offsets>=numel(vector_smooth)) = [];
 
+% If two peaks are close together, choose the first one (based on piloting,
+% it seems that closely following peaks, even if larger, tend to be speech
+% and not inhalation)
+
+for i = 2:numel(offsets)
+    t1 = offsets(i-1);
+    if ~isnan(t1)
+        if (offsets(i) - t1) <= minPeakDist
+            t2 = offsets(i);
+            m = max([vector_smooth(t1) vector_smooth(t2)]);
+            thresh = 0.5*m;
+            
+            if vector_smooth(t1) >= thresh
+                offsets(i) = NaN;
+                onsets(i) = NaN;
+            else
+                offsets(i-1) = NaN;
+                onsets(i) = NaN;
+            end
+        end
+    end
+end
+
+onsets(isnan(onsets)) = [];
+offsets(isnan(offsets)) = [];
+
 % Join split breaths
 
 x = [1 ; offsets];
 y = [onsets ; numel(vector_smooth)];
 z_dist = y-x;
 z_ht = vector_smooth(y)-vector_smooth(x);
-idx = NaN(numel(x),2);
 
 for i = 2:numel(x)-1
-    if z_dist(i) < 1.25*minDur | z_ht(i) > -0.05
+    if (z_dist(i) < 2*minDur) || (z_ht(i) > -0.05 & z_dist(i) < 1.5*minDur)
+
+        old_t1 = x(i);
+        old_t2 = y(i);
+        new_t1 = onsets(i-1);
+        new_t2 = offsets(i);
         
-        % Check that the new long breath does not contain a distinct
-        % peak within it
-        
-        new_t1 = onsets(offsets==x(i));
-        new_t2 = offsets(onsets==y(i));
+        if isempty(new_t1) || isnan(new_t1)
+            j = i - 1;
+            while isnan(new_t1) || isnan(new_t1)
+                new_t1 = onsets(j);
+                j = j-1;
+            end
+        end
         
         newSlope = vector_smooth(new_t1:new_t2);
         
-        if ~(any(diff(find(newSlope<quantile(newSlope,0.1)))>timeChunk))
-            idx(i,1) = onsets(onsets==y(i));
-            idx(i,2) = offsets(offsets==x(i));
+        if ~(any(diff(find(newSlope<quantile(newSlope,0.45)))>timeChunk))
             
-            %offsets(offsets==x(i)) = NaN;
-            %onsets(onsets==y(i)) = NaN;
+            % Check that the new longer breath does not contain a distinct
+            % peak/valley within
+            
+            [~,m] = max(newSlope);
+            idx = find(offsets==new_t2);
+            offsets(offsets==old_t1) = NaN;
+            if (new_t1 + m) - 1 ~= new_t2
+                offsets(idx) = (new_t1 + m) - 1;
+                x(x==new_t2) = (new_t1 + m) - 1;
+            end
+
+            [~,m] = min(newSlope);
+            idx = find(onsets==new_t1);
+            onsets(onsets==old_t2) = NaN;
+            if (new_t1 + m) - 1 ~= new_t1
+                onsets(idx) = (new_t1 + m) - 1;
+                y(y==new_t1) = (new_t1 + m) - 1;
+            end
+
         end
     end
 end
 
-onsets(ismember(onsets,idx(:,1))) = [];
-offsets(ismember(offsets,idx(:,2))) = [];
+onsets(isnan(onsets)) = [];
+offsets(isnan(offsets)) = [];
 
 brDur = offsets-onsets;
 brHt = vector_smooth(offsets)-vector_smooth(onsets);
@@ -260,6 +311,7 @@ if numel(onsets) > 4
 end
 
 if plotResults == 1
+    figure;
     plot(vector_smooth,'LineWidth',0.75,'Color',[0.3010 0.7450 0.9330]);
     hold on
     plot(onsets,vector_smooth(onsets),'gx','MarkerSize',8)
@@ -267,9 +319,10 @@ if plotResults == 1
     yticks(-1:0.5:1)
     
     xlabel('Time (seconds)');
-    xticks(1:round(numel(vector)/10):numel(vector)+1);
+    xticks(1:round(numel(vector)/20):numel(vector)+1);
     t = numel(vector)/Fs;
-    xticklabels(0:round(t/11):t);
+    xticklabels(0:round(t/19):t);
+    axis tight
 
     grid on
     set(gcf, 'Position', [500, 500, 900, 350])
