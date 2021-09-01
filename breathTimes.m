@@ -86,7 +86,7 @@ for iii = 1:round((numel(vector_smooth)/timeChunk))-1
 end
 
 idx = zeros(size(meanSlope,1),1);
-idx(meanSlope(:,2)>=floor(minDur/timeChunk)) = 1;
+idx(meanSlope(:,2)>=ceil(minDur/timeChunk)) = 1;
 idx = strfind(idx',[1 0]);
 
 peaks = [];
@@ -124,6 +124,8 @@ for ii = 1:numel(peaks)
         t2 = peaks(ii);
     end
 
+    t1_new = t1;
+    
     vec = vector_smooth(t1:t2);
     
     if numel(vec) > minDur
@@ -137,6 +139,7 @@ for ii = 1:numel(peaks)
         for iii = 1:floor((numel(vec)/timeChunk))
             
             t1_loop = timeChunk*iii;
+            
             if iii == floor((numel(vec)/timeChunk))
                 t2_loop = numel(vec);
             else
@@ -163,50 +166,47 @@ for ii = 1:numel(peaks)
             meanSlope = [meanSlope ; vOut];
         end
 
-        % Narrow down end point (peak)
+        % Narrow down begin/end point windows
         
-        maxTot = find(meanSlope(:,2)==max(meanSlope(:,2)),1,'last');
-        pb = find(meanSlope(1:maxTot,2)==1,1,'last');
+        maxTot = find(meanSlope(:,2)==max(meanSlope(:,2)),1,'last'); % end of slope
+        pb = find(meanSlope(1:maxTot,2)==1,1,'last'); % beginning of slope
         
-        if (pb+1)*timeChunk >= numel(vec)
-            pb = 1;
+        if pb ~= 1
+            t1_new = t1 + (pb*timeChunk);
+            vec = vector_smooth(t1_new:t2);
+        end
+         meanSlope = meanSlope(pb:maxTot,:);
+
+        rt = meanSlope(:,3)/max(meanSlope(:,3));
+        
+        % Check grade of slope
+        
+        if find(rt>=0.05,1,'first') > 1 % trim any preceding flat section
+            pb = find(rt>=0.05,1,'first') - 1;
+            meanSlope = meanSlope(pb:end,:);
+            if pb ~= 1
+                t1_new = t1_new + (pb*timeChunk);
+                vec = vector_smooth(t1_new:t2);
+            end
         end
         
-        mp = ceil((maxTot-pb)/2);
-        maxR = quantile(meanSlope(pb+mp:maxTot,1),0.5);
-        maxR = find(meanSlope(pb+mp:maxTot,1)>=maxR,1,'last');
-        maxR = (pb+mp+maxR)-1;
-
-        if maxTot-maxR > 2 & ...
-                meanSlope(maxR,1)-meanSlope(maxTot,1) > ...
-                0.5 * meanSlope(maxR,1)
-            m = meanSlope(maxR,1);
-            m = find(meanSlope(maxR:maxTot,1)<=0.5*m,1,'first');
-            if isempty(m)
-                m = round((maxTot-maxR)/2);
+        
+        if find(rt>=0.95,1,'first') < numel(rt) % trim any subsequent flat section
+            slopeMax = find(rt>=0.95,1,'first') + 1;
+            if slopeMax ~= numel(rt)
+                t2_new = t1_new + (slopeMax*timeChunk);
+                vec = vector_smooth(t1_new:t2_new);
             end
-            maxSlope = maxR+m;
-        else
-            maxSlope = maxTot;
         end
 
         % Specify inhale begin
-        v = vec(timeChunk*pb:timeChunk*(pb+mp));
-        p = quantile(v,0.1);
-        p = find(v<=p,1,'last');
-        onsets = [onsets ; t1+(timeChunk*pb)+p];
+        p = quantile(vec,0.01);
+        p = find(vec<=p,1,'last');
+        onsets = [onsets ; t1_new + p];
         
         % Specify inhale end
-        if (timeChunk*maxSlope)+timeChunk < numel(vec)
-            v = vec((timeChunk*maxSlope):(timeChunk*maxSlope)+timeChunk);
-        else
-            v = vec((timeChunk*maxSlope):end);
-        end
-        [~,p] = max(v);
-        if isempty(p)
-            p = 1;
-        end
-        offsets = [offsets ; t1+(timeChunk*maxSlope)+p];
+        [~,p] = max(vec);
+        offsets = [offsets ; t1_new + p];
         
     end
 
@@ -303,9 +303,9 @@ offsets(idx) = [];
 brDur = offsets-onsets;
 brHt = vector_smooth(offsets)-vector_smooth(onsets);
 
-% Remove breaths < 50% of median duration/height
+% Remove breaths < 50% median height
 if numel(onsets) > 4
-    idx = brDur<0.5*median(brDur) | brHt<0.5*median(brHt);
+    idx = brHt<0.5*median(brHt); % can also do: brDur<0.25*median(brDur)
     onsets(idx) = [];
     offsets(idx) = [];
 end
