@@ -2,14 +2,14 @@
 % endings) from the breath belt signal. Requires MATLAB 2016 or later. 
 %
 % Usage: [onsets,offsets] =
-% breathTimes(vector,Fs,'WinSz',200,'MinDur',100,'MinHeight',0.1,'Plot',1)
+% breathTimes(vector,Fs,'WinSz',20,'MinDur',100,'MinHeight',0.1,'Plot',1)
 %
 % Required arguments: vector (Nx1 breath signal); Fs (sample rate)
 %
-% Optional name pair arguments: 'WinSz' (for smoothing, default is 250 ms);
-% 'MinDur' (minimum duration between onset and offset, default is 150 ms);
+% Optional name pair arguments: 'WinSz' (for moving mean smoothing, default is 20 ms);
+% 'MinDur' (minimum duration between onset and offset, default is 100 ms);
 % 'MinHeight' (minimum vertical distance between onset and offset), default
-% is 0.05 A.U.); 'Plot' (set to 1 to view results, default is 0)
+% is 0.075 A.U.); 'Plot' (set to 1 to view results, default is 0)
 %
 % Suggestions: Some breath belt patterns look like inhalations but are
 % associated with vocal exhalation, so make sure you corroborate this
@@ -21,9 +21,9 @@
 
 function [onsets,offsets] = breathTimes(vector,Fs,varargin)
 
-defaultWin = 250;
-defaultDuration = 150;
-defaultHeight = 0.5;
+defaultWin = 20;
+defaultDuration = 100;
+defaultHeight = 0.075;
 defaultPlot = 0;
 
 p = inputParser;
@@ -43,15 +43,15 @@ minDur = (p.Results.MinDur/1000)*Fs;
 minHt = p.Results.MinHeight;
 plotResults = p.Results.Plot;
 
-timeChunk = round(Fs/25); % Interval to check linearity of postive-going slope (i.e., inhalations) every ~40 ms
-minPeakDist = 300; % Separation in ms between peaks
+timeChunk = round(Fs/30); % Interval to check linearity of postive-going slope (i.e., inhalations) every ~33 ms
+minPeakDist = 0.3*Fs; % Separation in ms between peaks
+splitPeakDist = 0.15*Fs; % Threshold at which to join rather than delete breaths
 
 % Smooth
 vector_smooth = movmean(vector,Fs*(win/1000));
-vector_smooth = movmean(vector_smooth,round(Fs/50));
-vector_smooth = rescale(vector_smooth,-1,1);
+vector_smooth = rescale(vector_smooth,0,1);
 
-% Initial search for peaks (inhalation ends)
+% Initial round-up of peaks
 meanSlope = [];
 c = 1;
 
@@ -67,11 +67,11 @@ for iii = 1:round((numel(vector_smooth)/timeChunk))-1
     
     vOut = mean(diff(vector_smooth(t1_loop:t2_loop)))*1e+4;
     
-    if vOut < 1
+    if vOut < 0.1
         vOut(2) = 0;
         vOut(3) = 0;
         c = 1;
-    else % Continuous positive-going slope
+    else % Is a continuous, positive-going slope
         vOut(2) = c;
         if c == 1
             vOut(3) = vOut(1);
@@ -86,30 +86,75 @@ for iii = 1:round((numel(vector_smooth)/timeChunk))-1
 end
 
 idx = zeros(size(meanSlope,1),1);
-idx(meanSlope(:,2)>=ceil(minDur/timeChunk)) = 1;
-idx = strfind(idx',[1 0]);
+idx(meanSlope(:,2)>0) = 1;
+j = strfind(idx',[1 0 1]);
+idx(j+1) = 1;
+j = strfind(idx',[0 1 0]);
+idx(j+1) = 0;
+
+idx_st = strfind(idx',[0 1]); 
+idx_en = strfind(idx',[1 0]);
+
+idx = idx_en'-idx_st';
+ht = vector_smooth(idx_en);
+
+% Cut some of the obvious noise-related peaks
+for i = 2:numel(idx)
+    if idx(i)*timeChunk < minDur & ...
+            ht(i) < ht(i-1)
+    idx_en(i) = NaN;
+    end
+end
+
+idx_en(isnan(idx_en)) = [];
 
 peaks = [];
 
-for ii = 1:numel(idx) % Localised peaks/ends of positive slopes
+for ii = 1:numel(idx_en) % Localised peaks/ends of positive slopes
     if ii == 1
         t1 = 1;
-        t2 = (timeChunk*idx(ii))+timeChunk;
-    elseif ii == numel(idx)
-        t1 = (timeChunk*idx(ii))-timeChunk;
+        t2 = (timeChunk*idx_en(ii))+timeChunk;
+    elseif ii == numel(idx_en)
+        t1 = (timeChunk*idx_en(ii))-timeChunk;
         t2 = numel(vector_smooth);
     else
-        t1 = (timeChunk*idx(ii))-timeChunk;
-        t2 = (timeChunk*idx(ii))+timeChunk;
+        t1 = (timeChunk*idx_en(ii))-timeChunk;
+        if (timeChunk*idx_en(ii))+timeChunk > numel(vector_smooth)
+            t2 = numel(vector_smooth);
+        else
+            t2 = (timeChunk*idx_en(ii))+timeChunk;
+        end
     end
     
     [~,m] = max(vector_smooth(t1:t2));
     peaks = [peaks ; t1+m];
+    
 end
 
 peaks(peaks>=numel(vector_smooth)) = numel(vector_smooth);
 
-% Within slopes, determine inhalation beginning/end points
+peaks(isnan(peaks)) = [];
+
+
+% Join split slopes
+
+for i = 1:numel(peaks)-1
+    if ~isnan(peaks(i))
+        t1 = peaks(i);
+        t2 = peaks(i+1);
+        if t2-t1 < splitPeakDist
+            if vector_smooth(t1) >= 0.75*vector_smooth(t2)
+                peaks(i+1) = NaN;
+            else
+                peaks(i) = NaN;
+            end
+        end
+    end
+end
+
+peaks(isnan(peaks)) = [];
+
+% Within slopes, determine more precise inhalation beginning/end points
 
 onsets = [];
 offsets = [];
@@ -125,7 +170,7 @@ for ii = 1:numel(peaks)
     end
 
     t1_new = t1;
-    
+    t2_new = t2;
     vec = vector_smooth(t1:t2);
     
     if numel(vec) > minDur
@@ -165,7 +210,29 @@ for ii = 1:numel(peaks)
             end
             meanSlope = [meanSlope ; vOut];
         end
+        
+        % Join splits
+        for j = 2:size(meanSlope,1)-1
+            if meanSlope(j,2) == 0 & ...
+                    meanSlope(j-1,2) ~= 0 & ...
+                    meanSlope(j+1,2) ~= 0
 
+                meanSlope(j,2) = meanSlope(j-1,2) + 1;                
+                meanSlope(j,3) = meanSlope(j-1,3);
+                jj = 1;
+                while meanSlope(j+jj,2) ~= 0
+                    
+                    meanSlope(j+jj,2) = meanSlope(j+jj,2) + meanSlope(j,2);
+                    meanSlope(j+jj,3) = meanSlope(j+jj,3) + meanSlope(j-1,3);
+                    
+                    jj = jj + 1;
+                    if j+jj > size(meanSlope,1)
+                        break
+                    end
+                end
+            end
+        end
+        
         % Narrow down begin/end point windows
         
         maxTot = find(meanSlope(:,2)==max(meanSlope(:,2)),1,'last'); % end of slope
@@ -181,8 +248,8 @@ for ii = 1:numel(peaks)
         
         % Check grade of slope
         
-        if find(rt>=0.05,1,'first') > 1 % trim any preceding flat section
-            pb = find(rt>=0.05,1,'first') - 1;
+        if find(rt<0.06,1,'last') > 1 % trim any preceding flat section
+            pb = find(rt<0.06,1,'last') - 1;
             meanSlope = meanSlope(pb:end,:);
             if pb ~= 1
                 t1_new = t1_new + (pb*timeChunk);
@@ -202,37 +269,46 @@ for ii = 1:numel(peaks)
         % Specify inhale begin
         p = quantile(vec,0.01);
         p = find(vec<=p,1,'last');
-        onsets = [onsets ; t1_new + p];
         
+        new_beg = t1_new + p;
+
         % Specify inhale end
+        
+        vec = vector_smooth(new_beg:t2_new);
+        
         [~,p] = max(vec);
-        offsets = [offsets ; t1_new + p];
+        new_en = new_beg + p - 1;
+        
+        if new_en - new_beg >= minDur
+            onsets = [onsets ; new_beg];
+            offsets = [offsets ; new_en];
+        end
         
     end
-
+    
 end
 
 onsets(offsets>=numel(vector_smooth)) = [];
 offsets(offsets>=numel(vector_smooth)) = [];
 
-% If two peaks are close together, choose the first one (based on piloting,
-% it seems that closely following peaks, even if larger, tend to be speech
-% and not inhalation)
+% If two distinct peaks are close together, choose the first one (based on
+% piloting, it seems that distinct, closely following peaks, even if
+% larger, tend to be speech and not inhalation)
 
-for i = 2:numel(offsets)
-    t1 = offsets(i-1);
+for i = 1:numel(offsets)-1
+    t1 = offsets(i);
+    t2 = offsets(i+1);
     if ~isnan(t1)
-        if (offsets(i) - t1) <= minPeakDist
-            t2 = offsets(i);
+        if t2-t1 <= minPeakDist
             m = max([vector_smooth(t1) vector_smooth(t2)]);
             thresh = 0.5*m;
             
             if vector_smooth(t1) >= thresh
+                onsets(i+1) = NaN;
+                offsets(i+1) = NaN;
+            else
                 offsets(i) = NaN;
                 onsets(i) = NaN;
-            else
-                offsets(i-1) = NaN;
-                onsets(i) = NaN;
             end
         end
     end
@@ -241,74 +317,34 @@ end
 onsets(isnan(onsets)) = [];
 offsets(isnan(offsets)) = [];
 
-% Join split breaths
-
-x = [1 ; offsets];
-y = [onsets ; numel(vector_smooth)];
-z_dist = y-x;
-z_ht = vector_smooth(y)-vector_smooth(x);
-
-for i = 2:numel(x)-1
-    if (z_dist(i) < 2*minDur) || (z_ht(i) > -0.05 & z_dist(i) < 1.5*minDur)
-
-        old_t1 = x(i);
-        old_t2 = y(i);
-        new_t1 = onsets(i-1);
-        new_t2 = offsets(i);
-        
-        if isempty(new_t1) || isnan(new_t1)
-            j = i - 1;
-            while isnan(new_t1) || isnan(new_t1)
-                new_t1 = onsets(j);
-                j = j-1;
-            end
+% Join any remaining split breaths
+for ii = 1:numel(offsets)-1
+    t0 = onsets(ii);
+    if isnan(t0)
+        j = ii;
+        while isnan(t0)
+            t0 = onsets(j);
+            j = j - 1;
         end
-        
-        newSlope = vector_smooth(new_t1:new_t2);
-        
-        if ~(any(diff(find(newSlope<quantile(newSlope,0.45)))>timeChunk))
-            
-            % Check that the new longer breath does not contain a distinct
-            % peak/valley within
-            
-            [~,m] = max(newSlope);
-            idx = find(offsets==new_t2);
-            offsets(offsets==old_t1) = NaN;
-            if (new_t1 + m) - 1 ~= new_t2
-                offsets(idx) = (new_t1 + m) - 1;
-                x(x==new_t2) = (new_t1 + m) - 1;
-            end
+    end
+    t1 = offsets(ii);
+    t2 = onsets(ii+1);
+    rt = (vector_smooth(t1)-vector_smooth(t2))/...
+        (vector_smooth(t1)-vector_smooth(t0));
 
-            [~,m] = min(newSlope);
-            idx = find(onsets==new_t1);
-            onsets(onsets==old_t2) = NaN;
-            if (new_t1 + m) - 1 ~= new_t1
-                onsets(idx) = (new_t1 + m) - 1;
-                y(y==new_t1) = (new_t1 + m) - 1;
-            end
-
-        end
+    if (t2 - t1) < minDur & rt < 0.25
+        onsets(ii+1) = NaN;
+        offsets(ii) = NaN;
     end
 end
 
 onsets(isnan(onsets)) = [];
 offsets(isnan(offsets)) = [];
 
-brDur = offsets-onsets;
-brHt = vector_smooth(offsets)-vector_smooth(onsets);
-idx = brDur < minDur | brHt < minHt;
-onsets(idx) = [];
-offsets(idx) = [];
-
-brDur = offsets-onsets;
-brHt = vector_smooth(offsets)-vector_smooth(onsets);
-
-% Remove breaths < 50% median height
-if numel(onsets) > 4
-    idx = brHt<0.5*median(brHt); % can also do: brDur<0.25*median(brDur)
-    onsets(idx) = [];
-    offsets(idx) = [];
-end
+% Remove sub-threshold breaths
+z_ht = vector_smooth(offsets)-vector_smooth(onsets);
+onsets(z_ht<minHt) = [];
+offsets(z_ht<minHt) = [];
 
 if plotResults == 1
     figure;
@@ -330,6 +366,5 @@ if plotResults == 1
     title('Inhalation Events')
     set(gcf,'color','w')
 end
-
 
 end
