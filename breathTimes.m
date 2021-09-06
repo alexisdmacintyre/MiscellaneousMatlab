@@ -98,9 +98,9 @@ idx_en = strfind(idx',[1 0]);
 idx = idx_en'-idx_st';
 ht = vector_smooth(idx_en);
 
-% Cut some of the obvious noise-related peaks
+% Cut some of the obviously noise-generated peaks
 for i = 2:numel(idx)
-    if idx(i)*timeChunk < minDur & ...
+    if idx(i)*timeChunk < minDur && ...
             ht(i) < ht(i-1)
     idx_en(i) = NaN;
     end
@@ -134,7 +134,6 @@ end
 peaks(peaks>=numel(vector_smooth)) = numel(vector_smooth);
 
 peaks(isnan(peaks)) = [];
-
 
 % Join split slopes
 
@@ -213,8 +212,8 @@ for ii = 1:numel(peaks)
         
         % Join splits
         for j = 2:size(meanSlope,1)-1
-            if meanSlope(j,2) == 0 & ...
-                    meanSlope(j-1,2) ~= 0 & ...
+            if meanSlope(j,2) == 0 && ...
+                    meanSlope(j-1,2) ~= 0 && ...
                     meanSlope(j+1,2) ~= 0
 
                 meanSlope(j,2) = meanSlope(j-1,2) + 1;                
@@ -234,9 +233,23 @@ for ii = 1:numel(peaks)
         end
         
         % Narrow down begin/end point windows
-        
+
         maxTot = find(meanSlope(:,2)==max(meanSlope(:,2)),1,'last'); % end of slope
         pb = find(meanSlope(1:maxTot,2)==1,1,'last'); % beginning of slope
+        
+        n = find(meanSlope(pb:maxTot,1)<0);
+        
+        if ~isempty(n)
+            for jj = 1:numel(n)
+                a = maxTot-pb;
+                b = maxTot-(pb+n(jj));
+                if b/a > 0.8
+                    pb = pb+n(jj)-1;
+                elseif b/a < 0.1
+                    maxTot = pb+n(jj)-1;
+                end
+            end
+        end
         
         if pb ~= 1
             t1_new = t1 + (pb*timeChunk);
@@ -257,9 +270,8 @@ for ii = 1:numel(peaks)
             end
         end
         
-        
         if find(rt>=0.95,1,'first') < numel(rt) % trim any subsequent flat section
-            slopeMax = find(rt>=0.95,1,'first') + 1;
+            slopeMax = find(rt>=0.95,1,'first');
             if slopeMax ~= numel(rt)
                 t2_new = t1_new + (slopeMax*timeChunk);
                 vec = vector_smooth(t1_new:t2_new);
@@ -277,6 +289,16 @@ for ii = 1:numel(peaks)
         vec = vector_smooth(new_beg:t2_new);
         
         [~,p] = max(vec);
+        
+        if p == numel(vec)
+            m = 0;
+            while p == numel(vec)
+                vec = vector_smooth(new_beg:t2_new+m);
+                [~,p] = max(vec);
+                m = m + 1;
+            end
+        end
+        
         new_en = new_beg + p - 1;
         
         if new_en - new_beg >= minDur
@@ -296,14 +318,15 @@ offsets(offsets>=numel(vector_smooth)) = [];
 % larger, tend to be speech and not inhalation)
 
 for i = 1:numel(offsets)-1
-    t1 = offsets(i);
-    t2 = offsets(i+1);
-    if ~isnan(t1)
-        if t2-t1 <= minPeakDist
-            m = max([vector_smooth(t1) vector_smooth(t2)]);
+    if ~isnan(offsets(i))
+        if offsets(i+1)-offsets(i) <= minPeakDist
+            ht = [vector_smooth(offsets(i))-vector_smooth(onsets(i)) ...
+                vector_smooth(offsets(i+1))-vector_smooth(onsets(i))];
+
+            m = max([ht(1) ht(2)]);
             thresh = 0.5*m;
             
-            if vector_smooth(t1) >= thresh
+            if ht(1) > thresh
                 onsets(i+1) = NaN;
                 offsets(i+1) = NaN;
             else
@@ -332,7 +355,7 @@ for ii = 1:numel(offsets)-1
     rt = (vector_smooth(t1)-vector_smooth(t2))/...
         (vector_smooth(t1)-vector_smooth(t0));
 
-    if (t2 - t1) < minDur & rt < 0.25
+    if (t2 - t1) < minDur && rt < 0.15
         onsets(ii+1) = NaN;
         offsets(ii) = NaN;
     end
