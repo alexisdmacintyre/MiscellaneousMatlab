@@ -21,6 +21,7 @@
 
 function [onsets,offsets] = breathTimes(vector,Fs,varargin)
 
+
 defaultWin = 20;
 defaultDuration = 100;
 defaultHeight = 0.075;
@@ -86,7 +87,7 @@ for iii = 1:round((numel(vector_smooth)/timeChunk))-1
     meanSlope = [meanSlope ; vOut];
 end
 
-% Join splits
+% Join split slopes
 for j = 2:size(meanSlope,1)-1
     if meanSlope(j,2) == 0 && ...
             meanSlope(j-1,2) ~= 0 && ...
@@ -105,7 +106,7 @@ for j = 2:size(meanSlope,1)-1
     end
 end
 
-% Delete slopes < minimum duration / similar height
+% Ignore isolated slopes < minimum duration
 minSlope = floor(minDur/timeChunk);
 for i = 1:size(meanSlope,1)-1
     if (meanSlope(i,2) < minSlope & meanSlope(i,2) > 0) && ...
@@ -124,6 +125,7 @@ idx(meanSlope(:,2)>0) = 1;
 idx(1) = 0;
 idx(end) = 0;
 
+% Ignore successive slopes of a lesser height
 idx_st = strfind(idx',[0 1]);
 idx_en = strfind(idx',[1 0]);
 
@@ -139,7 +141,6 @@ end
 idx_en(isnan(idx_en)) = [];
 
 % Determine the local peaks of positive slopes
-
 peaks = [];
 
 for ii = 1:numel(idx_en)
@@ -168,7 +169,6 @@ peaks(peaks>=numel(vector_smooth)) = numel(vector_smooth);
 peaks(isnan(peaks)) = [];
 
 % Within established slopes, determine more precise inhalation beginning/end points
-
 onsets = [];
 offsets = [];
 
@@ -178,8 +178,8 @@ for ii = 1:numel(peaks)
         t1 = find(vector_smooth(1:peaks(ii))<quantile(vector_smooth(1:peaks(ii)),0.05),1,'last');
         t2 = peaks(ii);
     else
-        t1 = find(vector_smooth(peaks(ii-1):peaks(ii))<quantile(vector_smooth(...
-            peaks(ii-1):peaks(ii)),0.05),1,'last');
+        t1 = find(vector_smooth(peaks(ii-1):peaks(ii))<=quantile(vector_smooth(...
+            peaks(ii-1):peaks(ii)),0.025),1,'last');
         t1 = t1 + peaks(ii-1) - 1;
         t2 = peaks(ii);
     end
@@ -189,9 +189,9 @@ for ii = 1:numel(peaks)
     vec = vector_smooth(t1:t2);
     
     if numel(vec) >= minDur
+        
         % Analyse slope and trim flat segments preceding true onset/after
         % true peak using more precise window
-        
         meanSlope = [];
         c = 1;
         
@@ -207,7 +207,7 @@ for ii = 1:numel(peaks)
             
             vOut = mean(diff(vec(t1_loop:t2_loop)))*1e+4;
             
-            if vOut < 0
+            if vOut < 0.5
                 vOut(2) = 0;
                 vOut(3) = 0;
                 c = 1;
@@ -248,90 +248,84 @@ for ii = 1:numel(peaks)
         end
         
         % Narrow down begin/end point windows
-        
-        try
-            maxTot = find(meanSlope(:,2)==max(meanSlope(:,2)),1,'last'); % end of slope
-            pb = find(meanSlope(1:maxTot,2)==1,1,'last'); % beginning of slope
-        catch
-            pause
-        end
-        
-        n = find(meanSlope(pb:maxTot,1)<1);
-        
-        if ~isempty(n)
-            for jj = 1:numel(n)
-                a = maxTot-pb;
-                b = maxTot-(pb+n(jj));
-                if b/a > 0.8
-                    pb = pb+n(jj)-1;
-                elseif b/a < 0.1 && ...
-                        pb+n(jj)-1 <= size(meanSlope,1)
-                    maxTot = pb+n(jj)-1;
+        while size(meanSlope,1) > 0
+            maxTot = find(meanSlope(:,2)==max(meanSlope(:,2)),1,'last'); % End of biggest slope
+            pb = find(meanSlope(1:maxTot,2)==1,1,'last'); % Beginning of biggest slope
+            
+            [t1_new,t2_new,pb,maxTot,meanSlope,vec] = ...
+                updateFunc(t1_new,pb,maxTot,meanSlope,vector_smooth,shortChunk);
+            
+            % Check absolute grade of slope at edges
+            seg = round(0.2*size(meanSlope,1));
+            if seg >= 1
+                n = find(meanSlope(1:seg,1)<1,1,'last');
+                if ~isempty(n)
+                    pb = pb + n;
+                    [t1_new,t2_new,pb,maxTot,meanSlope,vec] = ...
+                        updateFunc(t1_new,pb,maxTot,meanSlope,vector_smooth,shortChunk);
                 end
             end
-        end
-        
-        if pb ~= 1
-            t1_new = t1 + (pb*shortChunk);
-            vec = vector_smooth(t1_new:t2);
-        end
-        
-        meanSlope = meanSlope(pb:maxTot,:);
-        
-        rt = meanSlope(:,3)/max(meanSlope(:,3));
-        
-        % Check grade of slope
-        if ~isempty(find(rt<0.06,1,'last'))
-            if find(rt<0.06,1,'last') > 1 % trim any preceding flat section
-                pb = find(rt<0.06,1,'last') - 1;
-                meanSlope = meanSlope(pb:end,:);
-                if pb ~= 1
-                    t1_new = t1_new + (pb*shortChunk) - 1;
-                    vec = vector_smooth(t1_new:t2);
-                end
-            end
-        end
-        
-        if ~isempty(find(rt>=0.95,1,'first') < numel(rt))
-            if find(rt>=0.95,1,'first') < numel(rt) % trim any subsequent flat section
-                slopeMax = find(rt>=0.95,1,'first');
-                if slopeMax ~= numel(rt)
-                    if t1_new + (slopeMax*shortChunk) < numel(vector_smooth)
-                        t2_new = t1_new + (slopeMax*shortChunk) - 1;
+            
+            seg = round(0.9*size(meanSlope,1));
+            if seg <= size(meanSlope,1) && seg > 0
+                n = find(meanSlope(seg:end,1)<1,1,'first');
+                if ~isempty(n)
+                    if n == 1
+                        maxTot = seg - 1;
                     else
-                        t2_new = numel(vector_smooth) - 1;
+                        maxTot = seg + n - 2;
                     end
-                    vec = vector_smooth(t1_new:t2_new);
+                    [t1_new,t2_new,pb,maxTot,meanSlope,vec] = ...
+                        updateFunc(t1_new,pb,maxTot,meanSlope,vector_smooth,shortChunk);
                 end
             end
-        end
-        
-        % Specify inhale begin
-        p = quantile(vec,0.005);
-        p = find(vec<=p,1,'last');
-        
-        new_beg = t1_new + p - 1;
-        
-        % Specify inhale end
-        
-        vec = vector_smooth(new_beg:t2_new);
-        
-        [~,p] = max(vec);
-        
-        if p == numel(vec)
-            m = 0;
-            while p == numel(vec) && t2_new+m <= numel(vector_smooth)
-                vec = vector_smooth(new_beg:t2_new+m);
-                [~,p] = max(vec);
-                m = m + 1;
+            
+            % Check relative grade of slope at edges
+            rt = meanSlope(:,3)/max(meanSlope(:,3));
+            if ~isempty(find(rt<0.06,1,'last'))
+                pb = find(rt<0.06,1,'last') + 1; % trim any preceding flat section
+                
+                [t1_new,t2_new,pb,maxTot,meanSlope,vec] = ...
+                    updateFunc(t1_new,pb,maxTot,meanSlope,vector_smooth,shortChunk);
+                rt = meanSlope(:,3)/max(meanSlope(:,3));
+                
             end
-        end
-        
-        new_en = new_beg + p - 1;
-        
-        if new_en - new_beg >= minDur
-            onsets = [onsets ; new_beg];
-            offsets = [offsets ; new_en];
+            
+            if ~isempty(find(rt>=0.95,1,'first'))
+                if find(rt>=0.95,1,'first') < numel(rt) % trim any subsequent flat section
+                    maxTot = find(rt>=0.95,1,'first');
+                    [t1_new,t2_new,pb,maxTot,meanSlope,vec] = ...
+                        updateFunc(t1_new,pb,maxTot,meanSlope,vector_smooth,shortChunk);
+                end
+            end
+            
+            % Specify inhale begin
+            p = quantile(vec,0.025);
+            p = find(vec<=p,1,'last');
+            
+            new_beg = t1_new + p - 1;
+            
+            % Specify inhale end
+            vec = vector_smooth(new_beg:t2_new);
+            
+            [~,p] = max(vec);
+            
+            if p == numel(vec)
+                m = 0;
+                while p == numel(vec) && t2_new+m <= numel(vector_smooth)
+                    vec = vector_smooth(new_beg:t2_new+m);
+                    [~,p] = max(vec);
+                    m = m + 1;
+                end
+            end
+            
+            new_en = new_beg + p - 1;
+            
+            if new_en - new_beg >= minDur
+                onsets = [onsets ; new_beg];
+                offsets = [offsets ; new_en];
+            end
+            break
         end
     end
 end
@@ -415,5 +409,25 @@ if plotResults == 1
     title('Inhalation Events')
     set(gcf,'color','w')
 end
+
+end
+
+function [t1_new,t2_new,pb,maxTot,meanSlope,vec] = ...
+    updateFunc(t1_new,pb,maxTot,meanSlope,vector_smooth,shortChunk)
+
+t2_new = t1_new + (maxTot*shortChunk) + shortChunk;
+if t2_new > numel(vector_smooth)
+    t2_new = numel(vector_smooth);
+end
+
+if pb ~= 1
+    t1_new = t1_new + (pb*shortChunk) - shortChunk;
+end
+
+vec = vector_smooth(t1_new:t2_new);
+
+meanSlope = meanSlope(pb:maxTot,:);
+pb = 1;
+maxTot = size(meanSlope,1);
 
 end
