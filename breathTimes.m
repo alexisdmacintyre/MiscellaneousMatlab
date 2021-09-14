@@ -8,7 +8,7 @@
 %
 % Optional name pair arguments: 'WinSz' (for moving mean smoothing, default is 20 ms);
 % 'MinDur' (minimum duration between onset and offset, default is 100 ms);
-% 'MinHeight' (minimum vertical distance between onset and offset), default
+% 'MinHeight' (minimum vertical distance between onset and offset, default
 % is 0.075 A.U.); 'Plot' (set to 1 to view results, default is 0)
 %
 % Suggestions: Some breath belt patterns look like inhalations but are
@@ -47,7 +47,7 @@ plotResults = p.Results.Plot;
 timeChunk = round(Fs/30); % Interval to check linearity of postive-going slope (i.e., inhalations) every ~33 ms
 shortChunk = round(0.5*timeChunk); % More precise interval for fine-tuning
 minPeakDist = 0.3*Fs; % Separation in ms between peaks
-splitPeakDist = 0.15*Fs; % Threshold at which to join rather than delete breaths
+%splitPeakDist = 0.15*Fs; % Threshold at which to join rather than delete breaths
 
 % Smooth
 vector_smooth = movmean(vector,Fs*(win/1000));
@@ -249,7 +249,8 @@ for ii = 1:numel(peaks)
         
         % Narrow down begin/end point windows
         while size(meanSlope,1) > 0
-            maxTot = find(meanSlope(:,2)==max(meanSlope(:,2)),1,'last'); % End of biggest slope
+            maxTot = find(meanSlope(:,3)==max(meanSlope(:,3)),1,'last'); % End of greatest pos. slope
+
             pb = find(meanSlope(1:maxTot,2)==1,1,'last'); % Beginning of biggest slope
             
             [t1_new,t2_new,pb,maxTot,meanSlope,vec] = ...
@@ -375,7 +376,7 @@ for ii = 1:numel(offsets)-1
     rt = (vector_smooth(t1)-vector_smooth(t2))/...
         (vector_smooth(t1)-vector_smooth(t0));
 
-    if (t2 - t1) < minDur && rt < 0.15
+    if (t2 - t1) < 1.5*minDur && rt < 0.15
         onsets(ii+1) = NaN;
         offsets(ii) = NaN;
     end
@@ -385,9 +386,17 @@ onsets(isnan(onsets)) = [];
 offsets(isnan(offsets)) = [];
 
 % Remove sub-threshold breaths
-z_ht = vector_smooth(offsets)-vector_smooth(onsets);
+z_ht = vector_smooth(offsets)-vector_smooth(onsets); % By height
 onsets(z_ht<minHt) = [];
 offsets(z_ht<minHt) = [];
+
+z_ht = vector_smooth(offsets)-vector_smooth(onsets); % By grade
+z_dur = offsets-onsets;
+z_grade = z_ht./z_dur;
+lt = prctile(iqr(z_grade),25)-1.5*iqr(z_grade); 
+onsets(z_grade<lt) = []; 
+offsets(z_grade<lt) = [];
+
 
 if plotResults == 1
     figure;
