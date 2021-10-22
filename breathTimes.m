@@ -21,7 +21,6 @@
 
 function [onsets,offsets] = breathTimes(vector,Fs,varargin)
 
-
 defaultWin = 20;
 defaultDuration = 100;
 defaultHeight = 0.075;
@@ -89,9 +88,10 @@ end
 
 % Join split slopes
 for j = 2:size(meanSlope,1)-1
-    if meanSlope(j,2) == 0 && ...
-            meanSlope(j-1,2) ~= 0 && ...
-            meanSlope(j+1,2) ~= 0
+    if meanSlope(j,2) == 0 & ...
+            meanSlope(j-1,2) ~= 0 & ...
+            find(meanSlope(j:end,2) ~= 0,1,'first') < 4
+        
         meanSlope(j,2) = meanSlope(j-1,2) + 1;
         meanSlope(j,3) = meanSlope(j-1,3);
         jj = 1;
@@ -224,29 +224,40 @@ for ii = 1:numel(peaks)
             end
             meanSlope = [meanSlope ; vOut];
         end
-        
+ 
         % Join splits
-        for j = 2:size(meanSlope,1)-1
-            if meanSlope(j,2) == 0 && ...
-                    meanSlope(j-1,2) ~= 0 && ...
-                    meanSlope(j+1,2) ~= 0
+        isPos = (meanSlope(:,2)>1)';
+        isPos(1) = 1;
+        isPos(end) = 1;
+        a = strfind(isPos,[1 0]);
+        b = strfind(isPos,[0 1]);
+        c = b-a;
+        c = c/size(meanSlope,1) < 0.06; % Join if split is <= 5% of total slope
+        a = a(c);
+        b = b(c);
+        
+        for j = 1:numel(a)
+            if (a(j) > 0.15*numel(isPos)) & ... % Don't join if closeby edges
+                    (numel(isPos)-b(j) > 0.15*numel(isPos))
                 
-                meanSlope(j,2) = meanSlope(j-1,2) + 1;
-                meanSlope(j,3) = meanSlope(j-1,3);
-                jj = 1;
-                while meanSlope(j+jj,2) ~= 0
-                    
-                    meanSlope(j+jj,2) = meanSlope(j+jj,2) + meanSlope(j,2);
-                    meanSlope(j+jj,3) = meanSlope(j+jj,3) + meanSlope(j-1,3);
-                    
-                    jj = jj + 1;
-                    if j+jj > size(meanSlope,1)
-                        break
-                    end
+                firstPos = find(meanSlope(1:a(j),2)==1,1,'last');
+                lastPos = find(meanSlope(b(j):end,2)<1,1,'first');
+                lastPos = b(j) + lastPos - 2;
+                
+                if isempty(firstPos)
+                    firstPos = 1;
                 end
+                if isempty(lastPos)
+                    lastPos = size(meanSlope,1);
+                end
+                
+                meanSlope(firstPos:lastPos,2) = ...
+                    1:(lastPos-firstPos)+1;
+                meanSlope(firstPos:lastPos,3) = ...
+                    cumsum(meanSlope(firstPos:lastPos,1));
             end
         end
-        
+
         % Narrow down begin/end point windows
         while size(meanSlope,1) > 0
             maxTot = find(meanSlope(:,3)==max(meanSlope(:,3)),1,'last'); % End of greatest pos. slope
@@ -267,7 +278,7 @@ for ii = 1:numel(peaks)
                 end
             end
             
-            seg = round(0.9*size(meanSlope,1));
+            seg = round(0.7*size(meanSlope,1));
             if seg <= size(meanSlope,1) && seg > 0
                 n = find(meanSlope(seg:end,1)<1,1,'first');
                 if ~isempty(n)
@@ -282,14 +293,15 @@ for ii = 1:numel(peaks)
             end
             
             % Check relative grade of slope at edges
+            meanSlope(:,3) = cumsum(meanSlope(:,1));
             rt = meanSlope(:,3)/max(meanSlope(:,3));
             if ~isempty(find(rt<0.06,1,'last'))
                 pb = find(rt<0.06,1,'last') + 1; % trim any preceding flat section
                 
                 [t1_new,t2_new,pb,maxTot,meanSlope,vec] = ...
                     updateFunc(t1_new,pb,maxTot,meanSlope,vector_smooth,shortChunk);
+                meanSlope(:,3) = cumsum(meanSlope(:,1));
                 rt = meanSlope(:,3)/max(meanSlope(:,3));
-                
             end
             
             if ~isempty(find(rt>=0.95,1,'first'))
@@ -301,7 +313,7 @@ for ii = 1:numel(peaks)
             end
             
             % Specify inhale begin
-            p = quantile(vec,0.025);
+            p = quantile(vec,0.01);
             p = find(vec<=p,1,'last');
             
             new_beg = t1_new + p - 1;
@@ -322,7 +334,8 @@ for ii = 1:numel(peaks)
             
             new_en = new_beg + p - 1;
             
-            if new_en - new_beg >= minDur
+            if new_en - new_beg >= minDur & ...
+                mean(meanSlope(:,1)) > 1
                 onsets = [onsets ; new_beg];
                 offsets = [offsets ; new_en];
             end
@@ -334,51 +347,56 @@ end
 onsets(offsets>=numel(vector_smooth)) = [];
 offsets(offsets>=numel(vector_smooth)) = [];
 
-% If two separate peaks are close together, choose the first one (based on
-% piloting, it seems that second/later peaks, even if larger, tend to be
-% speech and not inhalation)
-
-for i = 1:numel(offsets)-1
-    if ~isnan(offsets(i))
-        if offsets(i+1)-offsets(i) <= minPeakDist
-            ht = [vector_smooth(offsets(i))-vector_smooth(onsets(i)) ...
-                vector_smooth(offsets(i+1))-vector_smooth(onsets(i))];
-
-            m = max([ht(1) ht(2)]);
-            thresh = 0.5*m;
-            
-            if ht(1) > thresh
-                onsets(i+1) = NaN;
-                offsets(i+1) = NaN;
-            else
-                offsets(i) = NaN;
-                onsets(i) = NaN;
-            end
-        end
-    end
-end
-
-onsets(isnan(onsets)) = [];
-offsets(isnan(offsets)) = [];
 
 % Join any remaining split breaths
-for ii = 1:numel(offsets)-1
-    t0 = onsets(ii);
-    if isnan(t0)
-        j = ii;
-        while isnan(t0)
-            t0 = onsets(j);
-            j = j - 1;
-        end
-    end
-    t1 = offsets(ii);
-    t2 = onsets(ii+1);
-    rt = (vector_smooth(t1)-vector_smooth(t2))/...
-        (vector_smooth(t1)-vector_smooth(t0));
 
-    if (t2 - t1) < 1.5*minDur && rt < 0.15
-        onsets(ii+1) = NaN;
-        offsets(ii) = NaN;
+% If two separated peaks are close together, choose the first one (based on
+% comparison to acoustic signal, it seems that second/later peaks, even if larger, tend to be
+% speech and not inhalation)
+
+for ii = 1:numel(offsets)-1
+    if ~(isnan(onsets(ii)) & isnan(offsets(ii)))
+        
+        t0 = onsets(ii);
+        
+        if isnan(t0)
+            j = ii;
+            while isnan(t0)
+                t0 = onsets(j);
+                j = j - 1;
+            end
+        end
+        
+        t1 = offsets(ii);
+        t2 = onsets(ii+1);
+        t3 = offsets(ii+1);
+        
+        if t2-t1 < 1.5*minDur
+            if t2-t1 >= 1.25*timeChunk
+                % Keep split
+                ht = [vector_smooth(t1)-vector_smooth(t0) ...
+                    vector_smooth(t3)-vector_smooth(t0)];
+                
+                if ht(1)/ht(2) > 0.5
+                    % only keep first slope
+                    onsets(ii+1) = NaN;
+                    offsets(ii+1) = NaN;
+                else
+                    % only keep second slope
+                    [~,new_beg] = min(vector_smooth(t1:t2));
+                    new_beg = new_beg + t1 - 1;
+                    onsets(ii+1) = new_beg;
+                    
+                    onsets(ii) = NaN;
+                    offsets(ii) = NaN;
+                end
+                
+            else
+                % Join
+                onsets(ii+1) = NaN;
+                offsets(ii) = NaN;
+            end
+        end
     end
 end
 
@@ -393,7 +411,7 @@ offsets(z_ht<minHt) = [];
 z_ht = vector_smooth(offsets)-vector_smooth(onsets); % By grade
 z_dur = offsets-onsets;
 z_grade = z_ht./z_dur;
-lt = prctile(iqr(z_grade),25)-1.5*iqr(z_grade); 
+lt = prctile(z_grade,25)-2*iqr(z_grade); %prctile(iqr(z_grade),25)-1.5*iqr(z_grade); 
 onsets(z_grade<lt) = []; 
 offsets(z_grade<lt) = [];
 
